@@ -1,0 +1,27 @@
+专业技能：
+语言&基础：精通python； 熟悉java，c++，shell
+相关工具或框架：Robotfamework, Pytest, Jenkins, Jira, 
+Docker, K8S，grafana，postman, selenium
+AI：Skills，Agent, LangChain, RAG, 深度学习理论基础，DeepEval
+
+工作经历：
+2018/04 - 至今，戴尔易安信，ECS(弹性云存储)部门, 高级软件工程师
+
+KV索引引擎服务     2023/07-至今
+1.负责项目测试阶段的可观测性PoC, 自动化脚本采集数据并接入influxdb+grafana, 为性能瓶颈分析，回归对比提供数据支撑。 
+2.使用pytest, 设计并实现了100%自动化测试用例，覆盖了功能/性能/故障注入/升级测试等情景。开发并维护了团队共用的测试基础库，包括负载输入，升级任务集成，持续性能监控，测试用例结果上传等。
+3.负责 Tier1/Tier2持续测试流水线建设与维护，完成21 个自动化jenkins job接入、提升代码覆盖率由40%到80%、保障TP/RC/ZBB 周期按时完成。
+
+数据块(chunk)服务    2020/02 - 2023/06
+1.负责chunk相关特性在K8S场景下的测试设计与验证，使用robotframework 实现了50+测试场景，包括btree/repo chunk相关功能验证，pod重启，node roboot，upgrade等。
+2.负责chunk EC(擦除编码)相关项目的功能测试，例如streaming EC, EC retiring等。
+
+空间回收服务        2018/04 - 2020/02 
+1.负责ecs存储系统Space Reclamation模块的日常监控与问题分析工作。通过调用内部API以及检查log,自动化采集集群各节点的空间回收状态相关的关键指标，结合服务日志对异常进行定位分析，并定期输出结构化的daily report。
+2.在监控期间发现上百余重要 bug, 排除了数据丢失的隐患。帮助团队及时发现GC 停滞等潜在问题，推动了相关bug 的排查和修复。
+3.负责gc相关项目的优化验证。
+
+AI实践：
+1.设计并开发多个面向OBS场景的domain-specific AI agent, 包括自动生成用例, 故障诊断，jenkins job失败分析，pr自动化处理等，提升问题排查效率和自动化水平。
+2.参与 AI Hackathon，开发 OBS 稳定性分析平台，该平台用于日志分析、问题诊断和稳定性洞察。我负责：项目中的RAG 部分实现，将 OBS 技术知识文档构建为可检索的向量知识库，使系统在分析日志和诊断问题时，可以自动检索相关领域知识，提供上下文支持。
+3.基于Python,pytest, DeepEval和Ollama搭建本地RAG评测框架；评估LLM回答的相关性，忠实性，幻觉和语义正确性。
