@@ -1,0 +1,936 @@
+# Skill Repo 搭建、导入使用与面试问题
+
+这份文档用于学习如何从 0 到 1 搭建一个 Agent Skill Repository,并准备相关面试问题。
+
+内容已脱敏,不包含任何公司内部系统地址、内部项目名称、内部认证方式或敏感业务信息。
+
+---
+
+# 一、什么是 Skill
+
+## 1. Skill 的概念
+
+Skill 可以理解为给 AI Agent 使用的“能力包”。
+
+它把某一类任务的知识、流程、脚本、工具使用方法、注意事项封装起来,让 Agent 在遇到对应任务时可以自动加载并按照预定义步骤执行。
+
+简单说:
+
+```text
+Skill = 任务说明 + 操作流程 + 工具脚本 + 使用规则 + 示例
+```
+
+例如可以做这些 Skill:
+
+- 查询缺陷系统的 Skill。
+- 分析日志的 Skill。
+- 自动生成测试报告的 Skill。
+- 运行某类测试的 Skill。
+- 部署环境的 Skill。
+- 浏览器自动化 Skill。
+- RAG 评测 Skill。
+
+## 2. 为什么需要 Skill
+
+没有 Skill 时,Agent 每次都要重新理解流程,容易遗漏步骤。
+
+有 Skill 后:
+
+- 复杂流程可以标准化。
+- 常用命令可以复用。
+- 团队经验可以沉淀。
+- Agent 能更稳定地完成特定任务。
+- 面向不同任务可以按需加载上下文,减少 prompt 过长。
+
+## 3. Skill 和普通文档有什么区别
+
+普通文档主要给人看。
+
+Skill 是给 Agent 使用的结构化操作说明。
+
+Skill 通常更强调:
+
+- 什么时候触发。
+- 输入是什么。
+- 执行步骤是什么。
+- 使用哪些工具或脚本。
+- 出错怎么处理。
+- 输出格式是什么。
+- 安全边界是什么。
+
+---
+
+# 二、一个 Skill Repo 的典型结构
+
+一个 Skill Repository 通常可以这样组织:
+
+```text
+my-skills/
+├── README.md
+├── AGENTS.md
+├── package.json                # 可选,如果使用 npm / openskills 工具
+├── categories.json             # 可选,用于技能分类
+├── docs/                       # 可选,放通用文档
+│   ├── categories.md
+│   └── usage.md
+└── skills/
+    ├── my-first-skill/
+    │   ├── SKILL.md
+    │   ├── scripts/
+    │   │   └── helper.py
+    │   ├── templates/
+    │   │   └── report.md
+    │   └── examples/
+    │       └── sample-input.txt
+    └── another-skill/
+        └── SKILL.md
+```
+
+最核心的是:
+
+```text
+skills/<skill-name>/SKILL.md
+```
+
+每一个 Skill 都是一个独立目录,目录里必须有 `SKILL.md`。
+
+---
+
+# 三、SKILL.md 的基本格式
+
+## 1. 最小可用格式
+
+```yaml
+---
+name: my-first-skill
+description: Use this skill when the user asks to analyze test logs and summarize likely root causes.
+metadata:
+  category: Testing
+---
+
+# My First Skill
+
+## When to use
+
+Use this skill when the user asks to analyze logs, summarize failures, or identify likely root cause.
+
+## Steps
+
+1. Ask for the log file path if it is missing.
+2. Read the log file.
+3. Extract error messages, stack traces, timestamps, and related components.
+4. Group similar failures.
+5. Output a concise Markdown report.
+
+## Output format
+
+- Summary
+- Key evidence
+- Possible root cause
+- Suggested next action
+```
+
+## 2. Front matter 字段说明
+
+`SKILL.md` 顶部的 `---` 部分叫 front matter。
+
+常见字段:
+
+```yaml
+---
+name: skill-name
+description: A short description that tells the agent when to use this skill.
+metadata:
+  category: Testing
+  subcategory: log-analysis
+---
+```
+
+字段含义:
+
+- `name`: Skill 名称,建议小写加横线,例如 `log-analysis`。
+- `description`: 最重要的触发说明,Agent 会根据它判断什么时候使用这个 Skill。
+- `metadata.category`: 分类,方便管理和展示。
+- `metadata.subcategory`: 子分类,可选。
+
+## 3. description 怎么写
+
+`description` 很重要,它决定 Agent 是否会选择这个 Skill。
+
+好的 description 应该包含:
+
+- 任务类型。
+- 触发关键词。
+- 适用场景。
+- 输入信息。
+- 产出结果。
+
+例子:
+
+```yaml
+description: Analyze application logs to identify errors, group failures, infer likely root causes, and produce a Markdown troubleshooting report. Use when the user asks for log analysis, failure diagnosis, or root cause summary.
+```
+
+不好的写法:
+
+```yaml
+description: A useful skill.
+```
+
+原因: 太泛,Agent 不知道什么时候用。
+
+---
+
+# 四、如何从 0 到 1 搭建自己的 Skill Repo
+
+## Step 1: 创建仓库目录
+
+```powershell
+mkdir my-skills
+cd my-skills
+```
+
+如果用 Git:
+
+```powershell
+git init
+```
+
+## Step 2: 创建基础目录
+
+```powershell
+mkdir skills
+mkdir docs
+```
+
+## Step 3: 创建 README.md
+
+`README.md` 用来说明这个仓库是什么、如何安装、如何使用。
+
+示例:
+
+```markdown
+# My Skills
+
+This repository stores reusable AI agent skills.
+
+## Layout
+
+- `skills/`: skill directories
+- `docs/`: shared documentation
+
+## Install
+
+Use openskills to install this repository globally or into the current project.
+```
+
+## Step 4: 创建 AGENTS.md
+
+`AGENTS.md` 是给 Agent 的全局规则和仓库说明。
+
+示例:
+
+```markdown
+# Agent Guide
+
+This repository contains reusable AI skills.
+
+## Rules
+
+- Each skill must live under `skills/<skill-name>/`.
+- Each skill must contain a `SKILL.md` file.
+- Do not hardcode secrets, tokens, passwords, or internal URLs.
+- Put executable helper scripts under `scripts/`.
+- Prefer clear step-by-step instructions.
+```
+
+## Step 5: 创建第一个 Skill
+
+```powershell
+mkdir skills\log-analysis
+New-Item skills\log-analysis\SKILL.md
+```
+
+写入:
+
+```markdown
+---
+name: log-analysis
+description: Analyze logs, extract error patterns, identify likely root causes, and generate a concise troubleshooting report.
+metadata:
+  category: Testing
+  subcategory: log-analysis
+---
+
+# Log Analysis Skill
+
+## When to use
+
+Use this skill when the user asks to analyze a log file, diagnose failures, or summarize root cause.
+
+## Inputs
+
+- Log file path
+- Optional time range
+- Optional service name
+
+## Steps
+
+1. Read the log file.
+2. Extract error, exception, warning, timeout, failed, retry keywords.
+3. Group messages by error pattern.
+4. Identify first failure and repeated failures.
+5. Summarize possible root cause and next action.
+
+## Output
+
+Return a Markdown report with:
+
+- Summary
+- Evidence
+- Root cause hypothesis
+- Suggested next steps
+```
+
+## Step 6: 如果 Skill 需要脚本,放到 scripts 目录
+
+```text
+skills/log-analysis/scripts/analyze_log.py
+```
+
+建议:
+
+- 脚本只做明确的小任务。
+- 参数通过命令行传入。
+- 不要硬编码密码、token、私有地址。
+- 输出 JSON 或 Markdown,方便 Agent 解析。
+
+Python 脚本建议结构:
+
+```python
+import argparse
+import json
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--log", required=True)
+    args = parser.parse_args()
+
+    result = {
+        "summary": "...",
+        "errors": [],
+    }
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()
+```
+
+## Step 7: 检查结构
+
+最终结构:
+
+```text
+my-skills/
+├── README.md
+├── AGENTS.md
+└── skills/
+    └── log-analysis/
+        ├── SKILL.md
+        └── scripts/
+            └── analyze_log.py
+```
+
+## Step 8: 提交到 Git 仓库
+
+```powershell
+git add .
+git commit -m "Add initial skills"
+git remote add origin <your-repo-url>
+git push -u origin main
+```
+
+---
+
+# 五、如何安装和导入 Skill Repo
+
+## 1. 安装到当前项目
+
+如果只想在当前 workspace 使用:
+
+```powershell
+npx.cmd openskills install <your-skill-repo-url>
+```
+
+通常会安装到当前项目的 skills 目录或工具约定目录。
+
+## 2. 全局安装
+
+如果希望所有项目都能使用:
+
+```powershell
+npx.cmd openskills install --global <your-skill-repo-url>
+```
+
+## 3. 自动确认安装全部 Skill
+
+如果不想交互选择:
+
+```powershell
+npx.cmd openskills install --global --yes <your-skill-repo-url>
+```
+
+## 4. Windows 上为什么用 npx.cmd
+
+Windows PowerShell 有时会因为脚本执行策略导致 `npx` 调用失败。
+
+可以优先用:
+
+```powershell
+npx.cmd openskills install --global --yes <your-skill-repo-url>
+```
+
+## 5. 查看已安装 Skills
+
+```powershell
+npx.cmd openskills list
+```
+
+## 6. 更新 Skills
+
+重新执行安装命令即可拉取最新版本:
+
+```powershell
+npx.cmd openskills install --global --yes <your-skill-repo-url>
+```
+
+然后在 IDE / Agent 面板里刷新 Skills。
+
+## 7. 在 IDE 中刷新 Skills
+
+通常步骤:
+
+1. 打开 Agent / Cascade 面板。
+2. 找到 Skills 配置入口。
+3. 点击刷新。
+4. 询问 Agent 当前有哪些可用 skills。
+
+可以问:
+
+```text
+Show me available skills.
+```
+
+或者:
+
+```text
+What skills are installed?
+```
+
+---
+
+# 六、如何设计一个高质量 Skill
+
+## 1. 明确触发场景
+
+Skill 不是越泛越好。
+
+好的 Skill 应该解决一个明确任务。
+
+例如:
+
+- 好: `analyze pytest failure logs`
+- 差: `help with testing`
+
+## 2. description 要写清楚
+
+Agent 很依赖 description 来选择 Skill。
+
+推荐格式:
+
+```text
+Use this skill when the user asks to <task>. It can <capabilities>. It outputs <result>.
+```
+
+例如:
+
+```yaml
+description: Use this skill when the user asks to debug pytest failures. It reads pytest output, identifies failing tests, extracts stack traces, groups root causes, and outputs a Markdown diagnosis report.
+```
+
+## 3. 步骤要可执行
+
+不要只写概念,要写 Agent 可以执行的步骤。
+
+差:
+
+```text
+Analyze the issue carefully.
+```
+
+好:
+
+```text
+1. Locate the test report.
+2. Extract failing test names.
+3. Read stack traces.
+4. Group failures by exception type.
+5. Identify whether failures come from test setup, assertion, environment, or product code.
+```
+
+## 4. 明确输入和输出
+
+每个 Skill 都应该写:
+
+- 需要用户提供什么。
+- 如果缺少信息,该问什么。
+- 最终输出什么格式。
+
+## 5. 保护敏感信息
+
+Skill 中不要写:
+
+- 真实密码。
+- Token。
+- 内部 URL。
+- 客户信息。
+- 私有 IP。
+- 真实集群名。
+- 公司内部项目名。
+
+可以用占位符:
+
+```text
+<your-api-url>
+<your-token>
+<your-cluster-name>
+<your-repo-url>
+```
+
+## 6. 脚本和文档分离
+
+建议:
+
+- `SKILL.md`: 写使用说明和流程。
+- `scripts/`: 放可执行脚本。
+- `templates/`: 放报告模板。
+- `examples/`: 放脱敏示例输入输出。
+
+## 7. 控制 Skill 粒度
+
+太大的 Skill 难维护。
+
+建议按任务拆分:
+
+- `jira-helper`
+- `log-analysis`
+- `pytest-debugger`
+- `rag-evaluator`
+- `release-note-generator`
+
+不要把所有内容塞到一个 Skill。
+
+---
+
+# 七、Skill 开发最佳实践
+
+## 1. 命名规范
+
+Skill 名称建议:
+
+- 小写。
+- 用横线分隔。
+- 能表达任务。
+
+例子:
+
+```text
+log-analysis
+pytest-debugger
+rag-evaluator
+jira-helper
+browser-automation
+```
+
+## 2. 目录规范
+
+```text
+skills/<skill-name>/SKILL.md
+skills/<skill-name>/scripts/
+skills/<skill-name>/templates/
+skills/<skill-name>/examples/
+```
+
+## 3. 脚本规范
+
+- 参数用 argparse。
+- 输出用 JSON 或 Markdown。
+- 错误信息要清楚。
+- 不要依赖当前工作目录。
+- 不要硬编码敏感信息。
+- 长任务要输出进度。
+
+## 4. 安全规范
+
+对有风险的操作要明确要求用户确认。
+
+例如:
+
+- 删除文件。
+- 修改生产环境。
+- 执行远程命令。
+- 提交代码。
+- 调用写 API。
+
+Skill 中可以写:
+
+```text
+Before running any destructive command, explain the command and ask for user confirmation.
+```
+
+## 5. 可维护性规范
+
+- 每个 Skill 只解决一类问题。
+- 文档步骤不要依赖个人经验。
+- 示例要脱敏。
+- 定期清理过期命令。
+- 对依赖版本写清楚。
+
+## 6. 测试 Skill
+
+可以用几类测试问题验证 Skill 是否会被正确触发:
+
+```text
+Please analyze this pytest failure log.
+Help me create a RAG evaluation report.
+Run browser automation to verify login flow.
+Summarize this release note from commits.
+```
+
+观察:
+
+- Agent 是否选择了正确 Skill。
+- 是否按步骤执行。
+- 是否缺少必要信息时会提问。
+- 输出是否符合格式。
+
+---
+
+# 八、Skill Repo 示例模板
+
+## README.md 示例
+
+```markdown
+# My Agent Skills
+
+This repository contains reusable AI Agent skills.
+
+## Install
+
+Install globally:
+
+```bash
+npx openskills install --global --yes <your-repo-url>
+```
+
+Install for current project:
+
+```bash
+npx openskills install --yes <your-repo-url>
+```
+
+## Layout
+
+- `skills/`: all skill folders
+- `docs/`: shared documents
+
+## Rules
+
+- Do not commit secrets.
+- Keep each skill focused.
+- Put helper scripts under `scripts/`.
+```
+
+## AGENTS.md 示例
+
+```markdown
+# Agent Instructions
+
+This repository stores reusable skills for AI agents.
+
+## Rules
+
+- Each skill must be under `skills/<skill-name>/`.
+- Each skill must have `SKILL.md`.
+- Do not include secrets, private URLs, internal names, customer data, or credentials.
+- Prefer clear Markdown steps.
+- Use scripts only when manual instructions are not enough.
+```
+
+## SKILL.md 示例
+
+```markdown
+---
+name: pytest-debugger
+description: Use this skill when the user asks to debug pytest failures, inspect stack traces, group failing tests, and produce a root cause report.
+metadata:
+  category: Testing
+  subcategory: pytest
+---
+
+# Pytest Debugger Skill
+
+## When to use
+
+Use this skill when the user provides pytest output, a test report, or asks why unit tests failed.
+
+## Inputs
+
+- pytest output or report path
+- optional changed files
+
+## Steps
+
+1. Read pytest output.
+2. Extract failing tests.
+3. Extract stack traces.
+4. Group failures by error type.
+5. Check whether failures are assertion, fixture, dependency, import, or environment failures.
+6. Summarize root cause and next actions.
+
+## Output
+
+Return Markdown:
+
+- Summary
+- Failed tests
+- Root cause hypothesis
+- Evidence
+- Suggested fix
+```
+
+---
+
+# 九、常见问题排查
+
+## 1. 安装后 Agent 看不到 Skill
+
+可能原因:
+
+- 没有刷新 IDE 中的 Skills。
+- Skill 没有 `SKILL.md`。
+- `SKILL.md` front matter 格式错误。
+- `name` 或 `description` 缺失。
+- 安装到了当前项目,但你在另一个项目里使用。
+
+处理:
+
+```powershell
+npx.cmd openskills list
+```
+
+然后刷新 IDE Skills。
+
+## 2. Skill 不会被自动触发
+
+可能原因:
+
+- `description` 太模糊。
+- 用户问题和 description 关键词不匹配。
+- Skill 范围太泛。
+- 有另一个 Skill 描述更匹配。
+
+解决:
+
+- 在 description 中写清楚触发关键词。
+- 添加 “Use this skill when...” 句式。
+- 拆分过大的 Skill。
+
+## 3. 安装命令失败
+
+可能原因:
+
+- Node.js/npm 未安装。
+- 网络无法访问仓库。
+- Git 认证失败。
+- Windows PowerShell 执行策略阻止脚本。
+
+解决:
+
+```powershell
+node --version
+npm --version
+git --version
+npx.cmd openskills list
+```
+
+Windows 上优先使用 `npx.cmd`。
+
+## 4. 脚本执行失败
+
+可能原因:
+
+- Python 版本不对。
+- 依赖没安装。
+- 路径写死。
+- 权限不足。
+- 输入参数缺失。
+
+解决:
+
+- 在 `SKILL.md` 写清楚 runtime requirements。
+- 用 argparse 提供清晰错误。
+- 避免硬编码路径。
+- 输出可读错误信息。
+
+---
+
+# 十、Skill 相关面试常问问题
+
+## Q1: 什么是 Agent Skill?
+
+**回答要点:**
+
+Agent Skill 是给 AI Agent 使用的能力包,它把某类任务的操作步骤、工具脚本、最佳实践、输入输出格式和注意事项封装起来。Agent 在遇到对应任务时可以按需加载 Skill,从而更稳定地执行复杂流程。
+
+## Q2: Skill 和 Prompt 有什么区别?
+
+**回答要点:**
+
+Prompt 是一次性的输入指令,Skill 是可复用的任务能力包。Skill 可以包含 prompt、流程、脚本、模板和故障处理方法,更适合沉淀团队经验和标准化复杂任务。
+
+## Q3: Skill Repo 的核心结构是什么?
+
+**回答要点:**
+
+核心结构是 `skills/<skill-name>/SKILL.md`。每个 Skill 一个独立目录,`SKILL.md` 描述名称、触发场景、执行步骤、输入输出和注意事项。复杂 Skill 可以额外包含 `scripts/`、`templates/`、`examples/`。
+
+## Q4: SKILL.md 中最重要的字段是什么?
+
+**回答要点:**
+
+`name` 和 `description` 最重要。`name` 是 Skill 标识,`description` 决定 Agent 什么时候选择这个 Skill。description 必须清楚描述适用场景、触发关键词和能力边界。
+
+## Q5: 如何让 Agent 更准确地选择 Skill?
+
+**回答要点:**
+
+- description 写清楚 “Use this skill when...”。
+- 包含常见触发关键词。
+- Skill 粒度不要太大。
+- 不同 Skill 之间边界清楚。
+- 避免多个 Skill 描述高度重叠。
+
+## Q6: 如何从 0 到 1 创建一个 Skill Repo?
+
+**回答要点:**
+
+先创建仓库和 `skills/` 目录,再为每个 Skill 创建 `skills/<skill-name>/SKILL.md`。在 `SKILL.md` 写 front matter、触发场景、输入、步骤和输出格式。如果需要自动化脚本,放到 `scripts/`。最后用 Git 管理并通过 openskills 安装。
+
+## Q7: 如何安装自己写的 Skill Repo?
+
+**回答要点:**
+
+可以用 openskills 安装。当前项目安装使用 `npx openskills install <repo-url>`,全局安装使用 `npx openskills install --global <repo-url>`。Windows PowerShell 下可以使用 `npx.cmd`。
+
+## Q8: 当前项目安装和全局安装有什么区别?
+
+**回答要点:**
+
+当前项目安装只对当前 workspace 生效,适合项目专用 Skill。全局安装对所有项目生效,适合通用 Skill,比如日志分析、测试报告生成、浏览器自动化等。
+
+## Q9: Skill 中什么时候需要写脚本?
+
+**回答要点:**
+
+当任务需要稳定、可重复、结构化处理时适合写脚本,例如解析日志、调用 API、生成报告、批量处理文件。如果只是流程指导,只写 Markdown 步骤就够了。
+
+## Q10: Skill 脚本应该注意什么?
+
+**回答要点:**
+
+脚本要参数化,不要硬编码路径和敏感信息;输出 JSON 或 Markdown;错误信息要清楚;依赖要写明;高风险操作要让用户确认。
+
+## Q11: 如何保证 Skill 安全?
+
+**回答要点:**
+
+不要提交 token、密码、私有 URL、客户信息和真实环境信息。对删除、修改、远程执行、提交代码等高风险操作要求用户确认。脚本使用最小权限原则,并保留日志。
+
+## Q12: 如何给 Skill 分类?
+
+**回答要点:**
+
+可以在 `metadata.category` 中设置分类,例如 Testing、DevOps、Documentation、AI、Data 等。如果分类下有子类,可以加 `metadata.subcategory`。分类有助于管理和展示。
+
+## Q13: Skill 不生效怎么排查?
+
+**回答要点:**
+
+先检查是否安装成功,再检查 IDE 是否刷新 Skills,然后检查 `SKILL.md` 是否存在、front matter 是否正确、description 是否清楚、安装位置是否正确。
+
+## Q14: Skill 和 Tool 有什么区别?
+
+**回答要点:**
+
+Tool 通常是一个可调用函数或 API,负责执行具体动作。Skill 更像任务级说明书,可以指导 Agent 什么时候用哪些工具、按什么步骤执行、如何处理异常和输出结果。
+
+## Q15: Skill 和 Workflow 有什么区别?
+
+**回答要点:**
+
+Workflow 更偏固定流程,通常是预定义步骤。Skill 更灵活,可以包含流程、知识、工具、脚本和判断逻辑,适合让 Agent 在特定任务场景中自主使用。
+
+## Q16: 如何设计一个日志分析 Skill?
+
+**回答要点:**
+
+输入是日志路径和时间范围;步骤包括读取日志、提取错误、按异常类型分组、找 first error、关联上下文、输出 root cause hypothesis 和 next action。复杂场景可以加 Python 脚本做结构化解析。
+
+## Q17: 如何设计一个测试失败分析 Skill?
+
+**回答要点:**
+
+输入是测试报告或控制台输出;提取失败用例、异常栈、失败阶段;区分 assertion、fixture、import、dependency、environment、product bug;最后输出失败摘要、证据和修复建议。
+
+## Q18: 如何设计一个 RAG 评测 Skill?
+
+**回答要点:**
+
+输入是 golden dataset、RAG agent 调用方式和评测指标;步骤是运行问题集、收集回答和检索上下文、用指标评估 answer relevancy、faithfulness、hallucination、correctness,最后生成 JSON/Markdown 报告。
+
+## Q19: 如何维护一个团队 Skill Repo?
+
+**回答要点:**
+
+建立目录规范、命名规范、脱敏规范和 review 机制。每个 Skill 要有清晰 owner、适用场景、依赖说明和示例。定期清理过期 Skill,避免重复 Skill。
+
+## Q20: 如果多个 Skill 都能处理同一个任务怎么办?
+
+**回答要点:**
+
+应该明确 Skill 边界,调整 description,必要时合并重复 Skill 或使用优先级/评分机制。目标是让 Agent 能稳定选择最合适的 Skill。
+
+---
+
+# 十一、面试可背诵总结
+
+## 1. Skill Repo 搭建总结
+
+```text
+如果我要从 0 到 1 搭建一个 Skill Repo,我会先创建仓库和 skills 目录,每个技能放在 skills/<skill-name>/ 下,核心文件是 SKILL.md。SKILL.md 顶部用 front matter 定义 name、description 和 metadata.category,正文写清楚什么时候使用、输入是什么、执行步骤、输出格式和安全注意事项。如果任务需要稳定执行,我会在 scripts 目录放辅助脚本。最后通过 openskills 安装到当前项目或全局环境,并在 IDE 中刷新使用。
+```
+
+## 2. 高质量 Skill 总结
+
+```text
+一个高质量 Skill 要有清晰的触发场景、明确的输入输出、可执行的步骤、必要的脚本支持和安全边界。description 要写得非常明确,因为 Agent 会根据它判断是否使用这个 Skill。Skill 不能包含敏感信息,脚本也不能硬编码 token、密码或私有地址。
+```
+
+## 3. Skill 价值总结
+
+```text
+Skill 的价值是把团队经验和复杂流程沉淀成可复用能力,让 Agent 在特定任务中按标准流程执行,减少遗漏和不稳定。它比普通 prompt 更系统,比单个 tool 更偏任务流程,适合日志分析、测试失败诊断、CI 分析、RAG 评测、报告生成等重复性工程任务。
+```
