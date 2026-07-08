@@ -1,0 +1,537 @@
+# DeepEval 详解与使用手册（deepeval_testing）
+
+这份文档系统整理 **DeepEval** 的细节和使用方法,面向 AI 软件测试 / LLM 质量工程实战。内容包括:核心概念、安装配置、测试用例、全部常用指标(含原理与参数)、RAG/Agent 评测、数据集、合成数据、Pytest 与 CI 集成、Judge 模型配置、红队安全测试、常见坑与最佳实践。
+
+配套资料:
+- `ai_question`:LLM/RAG/DeepEval 面试题(基础打底)。
+- `learning_plan`:AI 测试整体学习路线(DeepEval 是其中 W2-W5 的核心工具)。
+
+---
+
+# 1. DeepEval 是什么
+
+DeepEval 是一个开源的 **LLM 应用评测框架**,可以把 LLM 的输出当作被测对象,像写单元测试一样评估质量。
+
+核心定位:**"LLM 应用界的 Pytest"**。
+
+- 把"问题 / 模型回答 / 期望答案 / 检索上下文"组织成 `LLMTestCase`。
+- 用一系列 **metric(指标)** 打分,分数低于 `threshold` 即判定失败。
+- 大多数指标底层是 **LLM-as-a-Judge**(用另一个 LLM 当评委),也有基于统计/embedding 的。
+- 原生集成 **Pytest**,可 `deepeval test run` 或 `pytest` 执行,天然接 CI。
+
+**为什么不能用传统 `assert actual == expected`**:LLM 输出非确定性,同一问题有多种正确表达,字符串匹配太死板,需要语义级、上下文忠实性、幻觉等维度评估。
+
+---
+
+# 2. 安装与配置
+
+```bash
+pip install -U deepeval
+
+# 查看版本
+deepeval --help
+```
+
+## 2.1 配置 Judge 模型(关键)
+
+DeepEval 默认用 **OpenAI** 作为 judge 模型,需要 API key:
+
+```bash
+# 方式 1:环境变量
+export OPENAI_API_KEY="sk-..."          # Windows PowerShell: $env:OPENAI_API_KEY="sk-..."
+
+# 方式 2:CLI 设置默认模型
+deepeval set-openai --model gpt-4o-mini
+```
+
+## 2.2 用本地模型 / 自定义模型当 Judge
+
+无 OpenAI key 时,可用 Ollama 等本地模型(呼应你的本地 RAG 评测经验):
+
+```bash
+# DeepEval 内置 Ollama 支持
+deepeval set-ollama llama3.1:8b --base-url http://localhost:11434
+# 取消:deepeval unset-ollama
+```
+
+或自定义任意模型(继承 `DeepEvalBaseLLM`):
+
+```python
+from deepeval.models import DeepEvalBaseLLM
+from langchain_ollama import ChatOllama
+
+class OllamaJudge(DeepEvalBaseLLM):
+    def __init__(self, model="llama3.1:8b"):
+        self.model = ChatOllama(model=model, temperature=0)
+    def load_model(self): return self.model
+    def generate(self, prompt: str) -> str:
+        return self.model.invoke(prompt).content
+    async def a_generate(self, prompt: str) -> str:
+        res = await self.model.ainvoke(prompt)
+        return res.content
+    def get_model_name(self): return "ollama-llama3.1"
+
+# 用法:metric = AnswerRelevancyMetric(model=OllamaJudge())
+```
+
+> **重要**:Judge 模型能力直接影响评测可信度。本地小模型做 judge 可能不稳,关键场景建议用强模型(gpt-4o/4o-mini)或保留 `reason` 人工复核。评测时 judge 也应 `temperature=0`。
+
+## 2.3 关闭遥测(可选,企业内网建议)
+
+```bash
+export DEEPEVAL_TELEMETRY_OPT_OUT="YES"
+export ERROR_REPORTING="NO"
+```
+
+---
+
+# 3. 核心概念:LLMTestCase
+
+一个测试用例是评测的最小单元。字段:
+
+| 字段 | 含义 | 谁需要 |
+|---|---|---|
+| `input` | 用户输入 / 问题 | 几乎所有指标 |
+| `actual_output` | 模型实际输出 | 几乎所有指标 |
+| `expected_output` | 期望答案(golden) | Correctness / GEval 类 |
+| `retrieval_context` | RAG 检索到的上下文(list[str]) | Faithfulness / Contextual* |
+| `context` | 理想/参考上下文(list[str]) | Hallucination / Contextual Recall |
+| `tools_called` | Agent 实际调用的工具 | ToolCorrectness |
+| `expected_tools` | Agent 期望调用的工具 | ToolCorrectness |
+
+```python
+from deepeval.test_case import LLMTestCase
+
+tc = LLMTestCase(
+    input="怎么重启服务?",
+    actual_output="使用 svc restart 命令。",
+    expected_output="执行 svc restart 重启服务。",
+    retrieval_context=["服务重启命令是 svc restart。"],
+    context=["服务重启命令是 svc restart。"],
+)
+```
+
+> `retrieval_context` vs `context` 区别:`retrieval_context` 是 RAG **实际检索**到的(可能有噪音/漏召回),用于评检索质量;`context` 是**理想参考**上下文(ground truth),用于 Hallucination / Contextual Recall。
+
+## 3.1 多轮对话:ConversationalTestCase
+
+```python
+from deepeval.test_case import ConversationalTestCase, LLMTestCase
+
+convo = ConversationalTestCase(turns=[
+    LLMTestCase(input="端口是多少?", actual_output="9101。"),
+    LLMTestCase(input="那怎么改?", actual_output="改配置文件里的 port 字段。"),
+])
+```
+
+---
+
+# 4. 指标(Metrics)全解
+
+指标是 DeepEval 的核心。每个指标都有:`threshold`(阈值,默认 0.5)、`model`(judge 模型)、`include_reason`(是否给出理由)。评测后可读 `metric.score` 和 `metric.reason`。
+
+## 4.1 三种运行方式
+
+```python
+from deepeval.metrics import AnswerRelevancyMetric
+metric = AnswerRelevancyMetric(threshold=0.7)
+
+# 方式 A:单独 measure,手动读分数
+metric.measure(tc)
+print(metric.score, metric.reason, metric.is_successful())
+
+# 方式 B:assert_test(失败会 raise,配合 pytest)
+from deepeval import assert_test
+assert_test(tc, [metric])
+
+# 方式 C:evaluate(批量,出报告)
+from deepeval import evaluate
+evaluate([tc1, tc2], [metric])
+```
+
+## 4.2 生成质量指标
+
+### AnswerRelevancyMetric(答案相关性)
+
+- **测什么**:回答是否切题(答非所问则低分)。
+- **原理**:让 judge 从 `actual_output` 反推它在回答哪些"隐含问题",再算这些问题与 `input` 的语义相关比例。
+- **需要**:`input`, `actual_output`。
+
+```python
+AnswerRelevancyMetric(threshold=0.7, model="gpt-4o-mini", include_reason=True)
+```
+
+### FaithfulnessMetric(忠实度)
+
+- **测什么**:回答是否忠于 `retrieval_context`(有没有超出上下文的内容)。
+- **原理**:把 `actual_output` 拆成若干 claim(陈述),逐条判断能否被 `retrieval_context` 支持;`score = 被支持的 claim 数 / 总 claim 数`。
+- **需要**:`input`, `actual_output`, `retrieval_context`。
+
+### HallucinationMetric(幻觉)
+
+- **测什么**:回答是否与 `context` 矛盾/编造。
+- **原理**:对每个 context 判断 `actual_output` 是否与之一致,算矛盾比例。**分数越低越好**(它衡量的是幻觉程度)。
+- **需要**:`input`, `actual_output`, `context`。
+
+> **Faithfulness vs Hallucination 区别(面试高频)**:Faithfulness 用 `retrieval_context`(RAG 实际检索),关注"忠于检索到的内容";Hallucination 用 `context`(理想参考),关注"是否与事实矛盾"。两者常一起用。
+
+## 4.3 检索质量指标(RAG 专用)
+
+### ContextualPrecisionMetric(上下文精度)
+
+- **测什么**:相关的 chunk 是否排在不相关 chunk 前面(排序质量)。
+- **需要**:`input`, `actual_output`, `expected_output`, `retrieval_context`。
+
+### ContextualRecallMetric(上下文召回)
+
+- **测什么**:`expected_output` 里的信息点,是否都能在 `retrieval_context` 找到(该召回的召回了吗)。
+- **需要**:`input`, `actual_output`, `expected_output`, `retrieval_context`。
+
+### ContextualRelevancyMetric(上下文相关性)
+
+- **测什么**:检索到的上下文整体与 `input` 的相关程度(有没有太多噪音)。
+- **需要**:`input`, `actual_output`, `retrieval_context`。
+
+> **RAG 三层检索指标记忆**:Precision=排序好不好,Recall=漏没漏,Relevancy=噪音多不多。
+
+## 4.4 GEval(最灵活,万能自定义)
+
+GEval 是基于 LLM-as-a-Judge 的通用指标,可**自定义任意评测标准**(正确性、完整性、简洁性、格式、语气、安全等)。
+
+```python
+from deepeval.metrics import GEval
+from deepeval.test_case import LLMTestCaseParams
+
+correctness = GEval(
+    name="Correctness",
+    criteria="判断 actual_output 是否与 expected_output 在事实上一致,不遗漏关键信息。",
+    # 或用更精确的 evaluation_steps(推荐,减少 judge 发挥空间)
+    evaluation_steps=[
+        "对比 actual_output 和 expected_output 的核心事实是否一致",
+        "检查是否遗漏 expected_output 中的关键信息",
+        "轻微措辞差异不扣分,事实错误重扣分",
+    ],
+    evaluation_params=[
+        LLMTestCaseParams.INPUT,
+        LLMTestCaseParams.ACTUAL_OUTPUT,
+        LLMTestCaseParams.EXPECTED_OUTPUT,
+    ],
+    threshold=0.7,
+)
+```
+
+> `criteria`(一句话标准)和 `evaluation_steps`(分步标准)二选一;**用 `evaluation_steps` 结果更稳定可复现**。
+
+### DAGMetric(决策树式 GEval,进阶)
+
+用有向无环图定义评判逻辑(先判 A,再判 B...),适合复杂的确定性规则评测,比纯 GEval 更可控。
+
+## 4.5 Agent 指标
+
+### ToolCorrectnessMetric(工具调用正确性)
+
+- **非 LLM 指标**:直接比对 `tools_called` 与 `expected_tools`,确定性、可解释。
+
+```python
+from deepeval.metrics import ToolCorrectnessMetric
+from deepeval.test_case import LLMTestCase, ToolCall
+
+tc = LLMTestCase(
+    input="分析 job 123 失败原因",
+    actual_output="根因是网络超时",
+    tools_called=[ToolCall(name="get_ci_log"), ToolCall(name="search_known_issues")],
+    expected_tools=[ToolCall(name="get_ci_log"), ToolCall(name="search_known_issues")],
+)
+ToolCorrectnessMetric().measure(tc)
+```
+
+### TaskCompletionMetric(任务完成度)
+
+- 用 judge 评估 agent 是否完成了 `input` 描述的任务。
+
+## 4.6 其他内置指标
+
+- **SummarizationMetric**:摘要质量(覆盖度 + 无编造)。
+- **BiasMetric / ToxicityMetric**:偏见 / 毒性检测(安全)。
+- **PromptAlignmentMetric**:输出是否遵守 prompt 中的指令。
+- **JsonCorrectnessMetric**:输出是否符合指定 JSON schema。
+- **RagasMetric**:桥接 RAGAS 的指标。
+
+## 4.7 组合指标
+
+```python
+metrics = [
+    ContextualPrecisionMetric(threshold=0.7),
+    ContextualRecallMetric(threshold=0.7),
+    ContextualRelevancyMetric(threshold=0.7),
+    FaithfulnessMetric(threshold=0.7),
+    AnswerRelevancyMetric(threshold=0.7),
+    correctness,  # GEval
+]
+assert_test(tc, metrics)   # 全部通过才算过
+```
+
+---
+
+# 5. 与 Pytest 集成
+
+DeepEval 提供 `@pytest.mark.parametrize` 风格的数据驱动,推荐配合 golden dataset。
+
+```python
+# test_rag.py
+import pytest
+from deepeval import assert_test
+from deepeval.test_case import LLMTestCase
+from deepeval.metrics import FaithfulnessMetric, AnswerRelevancyMetric
+from rag_min import build_rag   # 你的 RAG 系统
+
+GOLDEN = [
+    {"q": "怎么重启服务?", "expected": "使用 svc restart。"},
+    {"q": "默认端口?", "expected": "默认端口 9101。"},
+]
+
+@pytest.fixture(scope="module")
+def ask():
+    return build_rag(["服务重启命令是 svc restart。默认端口 9101。"])
+
+@pytest.mark.parametrize("item", GOLDEN, ids=lambda i: i["q"])
+def test_rag(ask, item):
+    answer, ctx = ask(item["q"])
+    tc = LLMTestCase(
+        input=item["q"], actual_output=answer,
+        expected_output=item["expected"], retrieval_context=ctx,
+    )
+    assert_test(tc, [
+        FaithfulnessMetric(threshold=0.7),
+        AnswerRelevancyMetric(threshold=0.7),
+    ])
+```
+
+运行:
+
+```bash
+deepeval test run test_rag.py            # DeepEval 专用 runner(推荐,有汇总报告)
+deepeval test run test_rag.py -n 4       # 并行 4 进程加速
+pytest test_rag.py                       # 也能直接用 pytest
+```
+
+## 5.1 @deepeval.assert_test 与 hooks
+
+```python
+import deepeval
+
+@deepeval.on_test_run_end
+def report():
+    print("测试运行结束,可在此汇总/上传结果")
+```
+
+---
+
+# 6. 数据集(EvaluationDataset)与 Golden
+
+DeepEval 用 `Golden`(尚未运行的用例模板)和 `EvaluationDataset` 管理测试集。
+
+```python
+from deepeval.dataset import EvaluationDataset, Golden
+
+dataset = EvaluationDataset(goldens=[
+    Golden(input="怎么重启服务?", expected_output="使用 svc restart。"),
+    Golden(input="默认端口?", expected_output="默认端口 9101。"),
+])
+
+# 遍历 golden,调用你的系统生成 actual_output,组装 test case
+for golden in dataset.goldens:
+    answer, ctx = ask(golden.input)
+    dataset.add_test_case(LLMTestCase(
+        input=golden.input, actual_output=answer,
+        expected_output=golden.expected_output, retrieval_context=ctx,
+    ))
+
+from deepeval import evaluate
+evaluate(dataset, [FaithfulnessMetric(), AnswerRelevancyMetric()])
+```
+
+## 6.1 从 CSV / JSON 加载
+
+```python
+dataset = EvaluationDataset()
+dataset.add_goldens_from_csv("goldens.csv", input_col="question", expected_output_col="answer")
+# 或 add_goldens_from_json_file(...)
+```
+
+## 6.2 pytest 数据集迭代
+
+```python
+@pytest.mark.parametrize("tc", dataset)   # dataset 可直接被 parametrize 迭代
+def test_all(tc):
+    assert_test(tc, [AnswerRelevancyMetric(threshold=0.7)])
+```
+
+---
+
+# 7. 合成数据生成(Synthesizer)
+
+自动从文档生成 golden 数据集,快速冷启动(适合知识库刚建、缺人工标注时)。
+
+```python
+from deepeval.synthesizer import Synthesizer
+
+synth = Synthesizer()
+goldens = synth.generate_goldens_from_docs(
+    document_paths=["docs/guide.pdf", "docs/faq.md"],
+    include_expected_output=True,
+)
+dataset = EvaluationDataset(goldens=goldens)
+```
+
+- 也支持 `generate_goldens_from_contexts`(从已有 context 生成)。
+- **注意**:合成数据要人工抽检,避免"用 LLM 生成的题考 LLM"引入偏差。
+
+---
+
+# 8. 红队安全测试(DeepTeam)
+
+DeepEval 生态的安全测试用独立包 **DeepTeam**(同一团队),自动生成对抗攻击。
+
+```bash
+pip install deepteam
+```
+
+```python
+from deepteam import red_team
+from deepteam.vulnerabilities import Bias, PIILeakage, PromptLeakage
+from deepteam.attacks.single_turn import PromptInjection
+
+def model_callback(prompt: str) -> str:
+    return ask(prompt)[0]        # 你的被测系统
+
+risk = red_team(
+    model_callback=model_callback,
+    vulnerabilities=[Bias(), PIILeakage(), PromptLeakage()],
+    attacks=[PromptInjection()],
+)
+print(risk)                       # 各漏洞的攻破率
+```
+
+覆盖:prompt injection、jailbreak、PII 泄露、偏见、毒性、越权等(对应 OWASP LLM Top 10)。
+
+---
+
+# 9. CI 集成(质量门禁)
+
+把评测接进 CI,指标低于阈值就 fail,像单元测试一样卡质量。
+
+## 9.1 GitHub Actions
+
+```yaml
+# .github/workflows/llm-eval.yml
+name: LLM Eval
+on: [pull_request]
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -U deepeval && pip install -r requirements.txt
+      - env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: deepeval test run test_rag.py
+```
+
+## 9.2 Jenkins(套用你现有三闸门模式)
+
+```groovy
+stage('LLM Eval') {
+    steps {
+        sh 'pip install -U deepeval'
+        sh 'deepeval test run test_rag.py --junitxml deepeval-report.xml'
+    }
+    post { always { junit 'deepeval-report.xml' } }
+}
+```
+
+## 9.3 阈值策略
+
+- **smoke**:少量核心用例,阈值稍宽,每次 PR 跑(快反馈)。
+- **full**:全量 golden,阈值严格,每天定时跑(对应你 Tier1/Tier2 经验)。
+- 阈值不要拍脑袋:先跑基线,统计分数分布,取合理下界;逐步收紧。
+
+---
+
+# 10. Confident AI(可选云平台)
+
+DeepEval 背后公司提供 Confident AI 云平台:数据集托管、评测结果看板、线上监控、团队协作。
+
+```bash
+deepeval login          # 登录后 evaluate 结果自动上传云端看板
+```
+
+> 企业内网/数据敏感场景可不使用云,纯本地跑 + 自建报告(呼应你已有的 Markdown/JSON 报告做法)。
+
+---
+
+# 11. 常见坑与最佳实践
+
+## 11.1 常见坑
+
+- **Judge 不稳定**:本地小模型当 judge 分数波动大。→ 关键指标用强模型,judge `temperature=0`,保留 `reason`。
+- **被测模型未固定**:被测 LLM 也要 `temperature=0` + 固定 seed,否则每次输出不同,评测不可复现。
+- **缺字段报错**:用了 Faithfulness 却没传 `retrieval_context`,或用 Correctness 没传 `expected_output`。→ 对照第 3 节字段表。
+- **成本失控**:LLM 指标每条用例都调用 judge,大数据集成本高。→ 用 `-n` 并行、缓存、分层执行(smoke/full)。
+- **阈值过高**:一上来 threshold=0.9 全 fail。→ 先测基线再定阈值。
+- **中文/领域场景**:通用 judge 对专业领域判断可能不准。→ 用 `evaluation_steps` 写清楚标准,必要时人工复核。
+
+## 11.2 最佳实践
+
+- **分层评测**:检索层(Contextual*)+ 生成层(Faithfulness/AnswerRelevancy/GEval)分开看,便于定位失败在检索还是生成。
+- **失败归类**:根据哪个指标失败,自动输出"检索漏召回 / 噪音多 / 不忠实 / 答非所问 / judge 误判"结论。
+- **Golden 治理**:golden dataset 版本化入 git,按场景/难度分层,覆盖 happy path + 边界 + 负向。
+- **evaluation_steps 优先**:GEval 用分步标准,减少 judge 主观发挥。
+- **确定性优先**:能用非 LLM 指标(ToolCorrectness、JsonCorrectness、字符串断言)就用,更稳更省钱,LLM 指标作补充。
+- **报告可追溯**:每条结果记录 input / retrieval_context / actual_output / expected / score / reason,方便复盘。
+- **judge 与被测分离**:被测 agent model 和 judge model 用不同模型,避免"自己判自己"。
+
+---
+
+# 12. 速查表
+
+## 12.1 指标 → 所需字段
+
+| 指标 | input | actual_output | expected_output | retrieval_context | context |
+|---|---|---|---|---|---|
+| AnswerRelevancy | ✓ | ✓ | | | |
+| Faithfulness | ✓ | ✓ | | ✓ | |
+| Hallucination | ✓ | ✓ | | | ✓ |
+| ContextualPrecision | ✓ | ✓ | ✓ | ✓ | |
+| ContextualRecall | ✓ | ✓ | ✓ | ✓ | |
+| ContextualRelevancy | ✓ | ✓ | | ✓ | |
+| GEval | ✓ | ✓ | 视 criteria 而定 | | |
+| ToolCorrectness | ✓ | ✓ | (需 tools_called / expected_tools) | | |
+
+## 12.2 常用命令
+
+```bash
+deepeval test run test_file.py          # 运行评测(推荐)
+deepeval test run test_file.py -n 4     # 并行
+deepeval set-ollama llama3.1:8b         # 用本地模型当 judge
+deepeval set-openai --model gpt-4o-mini # 用 OpenAI 当 judge
+deepeval login                          # 连 Confident AI 云看板
+```
+
+## 12.3 最小可用模板
+
+```python
+from deepeval import assert_test
+from deepeval.test_case import LLMTestCase
+from deepeval.metrics import AnswerRelevancyMetric
+
+def test_min():
+    tc = LLMTestCase(input="端口?", actual_output="9101。")
+    assert_test(tc, [AnswerRelevancyMetric(threshold=0.7)])
+```
+
+---
+
+**一句话总结**:DeepEval 让你像写 Pytest 一样评测 LLM/RAG/Agent——用 `LLMTestCase` 组织数据,用 metric(多为 LLM-as-a-Judge)按阈值打分,分检索层和生成层定位问题,配 golden dataset 和 CI 门禁做质量回归。用它的关键是:**固定被测和 judge 的 temperature、优先确定性指标、GEval 用 evaluation_steps、先测基线再定阈值、保留 reason 可追溯**。
